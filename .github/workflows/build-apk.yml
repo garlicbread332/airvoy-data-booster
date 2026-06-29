@@ -39,13 +39,26 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
+      - name: Strip local plugin from app.json (already applied by prebuild)
+        working-directory: artifacts/mobile
+        run: |
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            cfg.expo.plugins = cfg.expo.plugins.filter(p =>
+              !(typeof p === 'string' && p.includes('withAndroidOverlay'))
+            );
+            fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
+            console.log('Plugins after strip:', JSON.stringify(cfg.expo.plugins));
+          "
+
       - name: Make Gradlew executable
         working-directory: artifacts/mobile/android
         run: chmod +x gradlew
 
       - name: Build Debug APK
         working-directory: artifacts/mobile/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
