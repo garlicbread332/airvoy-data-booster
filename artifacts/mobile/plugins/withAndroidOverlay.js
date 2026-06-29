@@ -81,7 +81,8 @@ const withAndroidOverlay = (config) => {
     "android",
     (c) => {
       const pkg = c.android?.package || "com.airvoy.databooster";
-      writeKotlinFiles(c.modResults.projectRoot, pkg);
+      const projectRoot = c.modRequest.projectRoot;
+      writeKotlinFiles(projectRoot, pkg);
       return c;
     },
   ]);
