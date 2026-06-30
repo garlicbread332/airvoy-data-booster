@@ -2,7 +2,6 @@ import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -17,369 +16,264 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useColors } from "@/hooks/useColors";
+const COLORS = {
+  bg: "#0A0F1E",
+  card: "#141929",
+  border: "#1E2D4A",
+  primary: "#3B8BFF",
+  accent: "#00D2FF",
+  muted: "#1A2540",
+  mutedFg: "#6B7FA8",
+  fg: "#FFFFFF",
+  subFg: "#A0AEC0",
+  success: "#00C48C",
+  warning: "#FFB020",
+  danger: "#FF4757",
+};
 
-const STORAGE_KEY = "airvoy_booster_state";
+type BotState = "idle" | "running";
 
-type BotState = "idle" | "running" | "paused";
+export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
+  const [state, setState] = useState<BotState>("idle");
+  const [totalAds, setTotalAds] = useState(0);
+  const [sessionAds, setSessionAds] = useState(0);
+  const [elapsed, setElapsed] = useState("00:00");
+  const [overlayGranted, setOverlayGranted] = useState(false);
+  const [accessGranted, setAccessGranted] = useState(false);
+  const [delaySeconds, setDelaySeconds] = useState(3);
 
-interface Stats {
-  totalAdsWatched: number;
-  sessionAdsWatched: number;
-  sessionStartTime: number | null;
-}
-
-function StatusBadge({ state }: { state: BotState }) {
-  const colors = useColors();
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const totalRef = useRef(0);
+  const scaleAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
+  // Load saved state
+  useEffect(() => {
+    AsyncStorage.getItem("booster_state").then((raw) => {
+      if (raw) {
+        const saved = JSON.parse(raw);
+        totalRef.current = saved.total ?? 0;
+        setTotalAds(saved.total ?? 0);
+        setDelaySeconds(saved.delay ?? 3);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Pulse animation when running
   useEffect(() => {
     if (state === "running") {
       const anim = Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
         ])
       );
       anim.start();
       return () => anim.stop();
-    } else {
-      pulseAnim.setValue(1);
     }
+    pulseAnim.setValue(1);
   }, [state]);
 
-  const badgeColor = state === "running" ? colors.success : state === "paused" ? colors.warning : colors.mutedForeground;
-  const label = state === "running" ? "RUNNING" : state === "paused" ? "PAUSED" : "STOPPED";
-
-  return (
-    <View style={[styles.badge, { borderColor: badgeColor + "40", backgroundColor: badgeColor + "18" }]}>
-      <Animated.View style={[styles.badgeDot, { backgroundColor: badgeColor, opacity: state === "running" ? pulseAnim : 1 }]} />
-      <Text style={[styles.badgeText, { color: badgeColor }]}>{label}</Text>
-    </View>
-  );
-}
-
-function PermissionCard({
-  icon,
-  title,
-  description,
-  granted,
-  onPress,
-}: {
-  icon: string;
-  title: string;
-  description: string;
-  granted: boolean;
-  onPress: () => void;
-}) {
-  const colors = useColors();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.permCard,
-        {
-          backgroundColor: colors.card,
-          borderColor: granted ? colors.success + "40" : colors.border,
-          opacity: pressed ? 0.8 : 1,
-        },
-      ]}
-    >
-      <View style={[styles.permIconWrap, { backgroundColor: granted ? colors.success + "20" : colors.muted }]}>
-        <MaterialCommunityIcons
-          name={icon as any}
-          size={22}
-          color={granted ? colors.success : colors.mutedForeground}
-        />
-      </View>
-      <View style={styles.permInfo}>
-        <Text style={[styles.permTitle, { color: colors.foreground }]}>{title}</Text>
-        <Text style={[styles.permDesc, { color: colors.mutedForeground }]}>{description}</Text>
-      </View>
-      {granted ? (
-        <Feather name="check-circle" size={20} color={colors.success} />
-      ) : (
-        <Feather name="chevron-right" size={20} color={colors.mutedForeground} />
-      )}
-    </Pressable>
-  );
-}
-
-export default function HomeScreen() {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
-
-  const [botState, setBotState] = useState<BotState>("idle");
-  const [stats, setStats] = useState<Stats>({
-    totalAdsWatched: 0,
-    sessionAdsWatched: 0,
-    sessionStartTime: null,
-  });
-  const [overlayGranted, setOverlayGranted] = useState(false);
-  const [accessGranted, setAccessGranted] = useState(false);
-  const [delaySeconds, setDelaySeconds] = useState(3);
-  const [elapsed, setElapsed] = useState("00:00");
-
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-
+  // Elapsed timer
   useEffect(() => {
-    loadState();
-  }, []);
-
-  useEffect(() => {
-    if (botState === "running" && stats.sessionStartTime) {
+    if (state === "running") {
       timerRef.current = setInterval(() => {
-        const secs = Math.floor((Date.now() - (stats.sessionStartTime ?? Date.now())) / 1000);
+        const secs = Math.floor((Date.now() - (startTimeRef.current ?? Date.now())) / 1000);
         const m = String(Math.floor(secs / 60)).padStart(2, "0");
         const s = String(secs % 60).padStart(2, "0");
         setElapsed(`${m}:${s}`);
       }, 1000);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (botState === "idle") setElapsed("00:00");
+      if (state === "idle") setElapsed("00:00");
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [botState, stats.sessionStartTime]);
+  }, [state]);
 
-  const loadState = async () => {
-    try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        setStats((s) => ({ ...s, totalAdsWatched: saved.totalAdsWatched ?? 0 }));
-        setDelaySeconds(saved.delaySeconds ?? 3);
-      }
-    } catch {}
-  };
-
-  const saveState = async (total: number, delay: number) => {
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ totalAdsWatched: total, delaySeconds: delay }));
-    } catch {}
-  };
-
-  const simulateCycle = useCallback(() => {
-    setStats((prev) => {
-      const next = {
-        ...prev,
-        totalAdsWatched: prev.totalAdsWatched + 1,
-        sessionAdsWatched: prev.sessionAdsWatched + 1,
-      };
-      saveState(next.totalAdsWatched, delaySeconds);
-      return next;
-    });
+  const incrementAd = useCallback(() => {
+    totalRef.current += 1;
+    setTotalAds(totalRef.current);
+    setSessionAds((s) => s + 1);
+    AsyncStorage.setItem("booster_state", JSON.stringify({ total: totalRef.current, delay: delaySeconds })).catch(() => {});
   }, [delaySeconds]);
 
   const handleStartStop = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
     Animated.sequence([
-      Animated.timing(scaleAnim, { toValue: 0.94, duration: 80, useNativeDriver: true }),
+      Animated.timing(scaleAnim, { toValue: 0.93, duration: 80, useNativeDriver: true }),
       Animated.timing(scaleAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
     ]).start();
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    if (botState === "idle") {
+    if (state === "idle") {
       if (!overlayGranted || !accessGranted) {
-        Alert.alert(
-          "Permissions Required",
-          "Please grant Overlay and Accessibility permissions before starting.",
-          [{ text: "OK" }]
-        );
+        Alert.alert("Permissions Required", "Grant both Overlay and Accessibility permissions first.");
         return;
       }
-      setBotState("running");
-      setStats((s) => ({ ...s, sessionAdsWatched: 0, sessionStartTime: Date.now() }));
-      const delay = delaySeconds * 1000;
-      intervalRef.current = setInterval(simulateCycle, delay + 15000);
+      startTimeRef.current = Date.now();
+      setState("running");
+      setSessionAds(0);
+      // Simulate cycle: every (ad duration 15s + delay) seconds
+      const cycleMs = (15 + delaySeconds) * 1000;
+      intervalRef.current = setInterval(incrementAd, cycleMs);
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      setBotState("idle");
-      setStats((s) => ({ ...s, sessionStartTime: null }));
+      setState("idle");
+      startTimeRef.current = null;
     }
   };
 
-  const openOverlaySettings = () => {
+  const openOverlay = () => {
     if (Platform.OS === "android") {
       Linking.openSettings();
-      setTimeout(() => setOverlayGranted(true), 2000);
-    } else {
-      setOverlayGranted(true);
     }
+    // Optimistically mark as granted after user goes to settings
+    setTimeout(() => setOverlayGranted(true), 1500);
   };
 
-  const openAccessibilitySettings = () => {
+  const openAccessibility = () => {
     if (Platform.OS === "android") {
-      Linking.sendIntent("android.settings.ACCESSIBILITY_SETTINGS").catch(() =>
-        Linking.openSettings()
-      );
-      setTimeout(() => setAccessGranted(true), 2000);
-    } else {
-      setAccessGranted(true);
+      Linking.sendIntent("android.settings.ACCESSIBILITY_SETTINGS").catch(() => Linking.openSettings());
     }
+    setTimeout(() => setAccessGranted(true), 1500);
   };
 
-  const allGranted = overlayGranted && accessGranted;
-  const isRunning = botState === "running";
+  const isRunning = state === "running";
 
   return (
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
-      <LinearGradient
-        colors={["#0A0F1E", "#0D1833", "#0A0F1E"]}
-        style={StyleSheet.absoluteFill}
-      />
+    <View style={styles.root}>
+      <LinearGradient colors={["#0D1420", "#0A0F1E"]} style={StyleSheet.absoluteFill} />
 
       <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[
-          styles.content,
-          { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 32 },
-        ]}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
         <View style={styles.header}>
-          <View style={[styles.logoWrap, { backgroundColor: colors.primary + "20" }]}>
-            <MaterialCommunityIcons name="lightning-bolt" size={28} color={colors.primary} />
+          <View style={styles.logoWrap}>
+            <MaterialCommunityIcons name="lightning-bolt" size={26} color={COLORS.primary} />
           </View>
-          <View style={styles.headerText}>
-            <Text style={[styles.appTitle, { color: colors.foreground }]}>Airvoy Booster</Text>
-            <Text style={[styles.appSub, { color: colors.mutedForeground }]}>Auto Ad Watcher</Text>
+          <View>
+            <Text style={styles.title}>Airvoy Booster</Text>
+            <Text style={styles.subtitle}>Auto Ad Watcher</Text>
           </View>
-          <StatusBadge state={botState} />
-        </View>
-
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statNum, { color: colors.primary }]}>{stats.totalAdsWatched}</Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Total Ads</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statNum, { color: colors.accent }]}>{stats.sessionAdsWatched}</Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>This Session</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statNum, { color: colors.success }]}>{elapsed}</Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Uptime</Text>
+          <View style={[styles.badge, { borderColor: isRunning ? COLORS.success + "50" : COLORS.mutedFg + "40", backgroundColor: isRunning ? COLORS.success + "15" : COLORS.muted }]}>
+            <Animated.View style={[styles.dot, { backgroundColor: isRunning ? COLORS.success : COLORS.mutedFg, opacity: isRunning ? pulseAnim : 1 }]} />
+            <Text style={[styles.badgeText, { color: isRunning ? COLORS.success : COLORS.mutedFg }]}>
+              {isRunning ? "RUNNING" : "STOPPED"}
+            </Text>
           </View>
         </View>
 
-        {/* Main control button */}
+        {/* Stats */}
+        <View style={styles.row}>
+          {[
+            { label: "Total Ads", value: String(totalAds), color: COLORS.primary },
+            { label: "Session", value: String(sessionAds), color: COLORS.accent },
+            { label: "Uptime", value: elapsed, color: COLORS.success },
+          ].map((s) => (
+            <View key={s.label} style={styles.statCard}>
+              <Text style={[styles.statNum, { color: s.color }]}>{s.value}</Text>
+              <Text style={styles.statLabel}>{s.label}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Big button */}
         <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-          <Pressable onPress={handleStartStop} style={styles.ctaWrap}>
+          <Pressable onPress={handleStartStop}>
             <LinearGradient
-              colors={isRunning ? ["#FF4757", "#C0392B"] : allGranted ? [colors.primary, "#1A56DB"] : [colors.muted, colors.muted]}
+              colors={isRunning ? [COLORS.danger, "#C0392B"] : (overlayGranted && accessGranted) ? [COLORS.primary, "#1A56DB"] : [COLORS.muted, "#0F1828"]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.ctaButton}
+              style={styles.bigBtn}
             >
-              <MaterialCommunityIcons
-                name={isRunning ? "stop-circle" : "play-circle"}
-                size={36}
-                color="#FFFFFF"
-              />
-              <Text style={styles.ctaText}>{isRunning ? "STOP BOOSTER" : "START BOOSTER"}</Text>
+              <MaterialCommunityIcons name={isRunning ? "stop-circle" : "play-circle"} size={34} color="#fff" />
+              <Text style={styles.bigBtnText}>{isRunning ? "STOP BOOSTER" : "START BOOSTER"}</Text>
             </LinearGradient>
           </Pressable>
         </Animated.View>
 
-        {!allGranted && (
-          <Text style={[styles.hintText, { color: colors.warning }]}>
-            Grant both permissions below to enable
-          </Text>
+        {(!overlayGranted || !accessGranted) && (
+          <Text style={styles.hint}>Grant both permissions below to enable</Text>
         )}
 
         {/* How it works */}
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>How It Works</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>How It Works</Text>
           {[
-            { icon: "eye-outline", text: "Opens Airvoy in background" },
-            { icon: "cursor-default-click-outline", text: 'Clicks "Watch Ad" automatically' },
-            { icon: "timer-outline", text: "Waits for ad to complete" },
-            { icon: "close-circle-outline", text: 'Clicks "X" to close the ad' },
-            { icon: "refresh", text: "Repeats continuously" },
-          ].map((item, i) => (
+            "Opens Airvoy in the background",
+            'Clicks "Watch Ad" automatically',
+            "Waits for the ad to finish (~15s)",
+            'Clicks "X" to close the ad',
+            "Repeats until you stop it",
+          ].map((step, i) => (
             <View key={i} style={styles.stepRow}>
-              <View style={[styles.stepNum, { backgroundColor: colors.primary + "20" }]}>
-                <MaterialCommunityIcons name={item.icon as any} size={16} color={colors.primary} />
+              <View style={styles.stepIcon}>
+                <Text style={styles.stepNum}>{i + 1}</Text>
               </View>
-              <Text style={[styles.stepText, { color: colors.secondaryForeground }]}>{item.text}</Text>
+              <Text style={styles.stepText}>{step}</Text>
             </View>
           ))}
         </View>
 
         {/* Permissions */}
-        <Text style={[styles.groupLabel, { color: colors.mutedForeground }]}>REQUIRED PERMISSIONS</Text>
+        <Text style={styles.groupLabel}>REQUIRED PERMISSIONS</Text>
 
-        <PermissionCard
-          icon="layers-outline"
-          title="Draw Over Other Apps"
-          description="Allows the booster to display over Airvoy"
-          granted={overlayGranted}
-          onPress={openOverlaySettings}
-        />
-        <PermissionCard
-          icon="gesture-tap"
-          title="Accessibility Service"
-          description="Enables auto-clicking ad buttons in Airvoy"
-          granted={accessGranted}
-          onPress={openAccessibilitySettings}
-        />
+        {[
+          { icon: "layers-outline", title: "Draw Over Other Apps", desc: "Lets booster display over Airvoy", granted: overlayGranted, onPress: openOverlay },
+          { icon: "gesture-tap", title: "Accessibility Service", desc: "Enables auto-clicking ad buttons", granted: accessGranted, onPress: openAccessibility },
+        ].map((p) => (
+          <Pressable key={p.title} onPress={p.onPress} style={({ pressed }) => [styles.permRow, { opacity: pressed ? 0.75 : 1, borderColor: p.granted ? COLORS.success + "50" : COLORS.border }]}>
+            <View style={[styles.permIcon, { backgroundColor: p.granted ? COLORS.success + "20" : COLORS.muted }]}>
+              <MaterialCommunityIcons name={p.icon as any} size={20} color={p.granted ? COLORS.success : COLORS.mutedFg} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.permTitle}>{p.title}</Text>
+              <Text style={styles.permDesc}>{p.desc}</Text>
+            </View>
+            {p.granted
+              ? <Feather name="check-circle" size={18} color={COLORS.success} />
+              : <Feather name="chevron-right" size={18} color={COLORS.mutedFg} />}
+          </Pressable>
+        ))}
 
         {/* Delay setting */}
-        <Text style={[styles.groupLabel, { color: colors.mutedForeground, marginTop: 24 }]}>SETTINGS</Text>
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.settingRow}>
-            <MaterialCommunityIcons name="clock-outline" size={20} color={colors.primary} />
-            <Text style={[styles.settingLabel, { color: colors.foreground }]}>Delay between ads</Text>
-            <Text style={[styles.settingValue, { color: colors.primary }]}>{delaySeconds}s</Text>
-          </View>
-          <View style={styles.delayButtons}>
+        <Text style={[styles.groupLabel, { marginTop: 20 }]}>DELAY BETWEEN ADS</Text>
+        <View style={styles.card}>
+          <View style={styles.row}>
             {[1, 2, 3, 5, 10].map((d) => (
               <Pressable
                 key={d}
                 onPress={() => {
                   setDelaySeconds(d);
-                  saveState(stats.totalAdsWatched, d);
+                  AsyncStorage.setItem("booster_state", JSON.stringify({ total: totalRef.current, delay: d })).catch(() => {});
                   Haptics.selectionAsync();
                 }}
-                style={[
-                  styles.delayChip,
-                  {
-                    backgroundColor: delaySeconds === d ? colors.primary : colors.muted,
-                    borderColor: delaySeconds === d ? colors.primary : colors.border,
-                  },
-                ]}
+                style={[styles.chip, { backgroundColor: delaySeconds === d ? COLORS.primary : COLORS.muted, borderColor: delaySeconds === d ? COLORS.primary : COLORS.border }]}
               >
-                <Text style={[styles.delayChipText, { color: delaySeconds === d ? "#fff" : colors.mutedForeground }]}>
-                  {d}s
-                </Text>
+                <Text style={[styles.chipText, { color: delaySeconds === d ? "#fff" : COLORS.mutedFg }]}>{d}s</Text>
               </Pressable>
             ))}
           </View>
         </View>
 
-        {/* Reset button */}
+        {/* Reset */}
         <Pressable
-          onPress={() => {
-            Alert.alert("Reset Stats", "Clear all ad watch history?", [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Reset",
-                style: "destructive",
-                onPress: () => {
-                  setStats({ totalAdsWatched: 0, sessionAdsWatched: 0, sessionStartTime: null });
-                  saveState(0, delaySeconds);
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                },
-              },
-            ]);
-          }}
-          style={({ pressed }) => [styles.resetBtn, { opacity: pressed ? 0.7 : 1 }]}
+          onPress={() => Alert.alert("Reset?", "Clear all statistics?", [
+            { text: "Cancel", style: "cancel" },
+            { text: "Reset", style: "destructive", onPress: () => {
+              totalRef.current = 0;
+              setTotalAds(0);
+              setSessionAds(0);
+              AsyncStorage.setItem("booster_state", JSON.stringify({ total: 0, delay: delaySeconds })).catch(() => {});
+            }},
+          ])}
+          style={styles.resetBtn}
         >
-          <Text style={[styles.resetText, { color: colors.mutedForeground }]}>Reset Statistics</Text>
+          <Text style={styles.resetText}>Reset Statistics</Text>
         </Pressable>
       </ScrollView>
     </View>
@@ -387,42 +281,35 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  scroll: { flex: 1 },
-  content: { paddingHorizontal: 20, gap: 16 },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 4 },
-  logoWrap: { width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  headerText: { flex: 1 },
-  appTitle: { fontSize: 20, fontWeight: "700" as const },
-  appSub: { fontSize: 12, fontWeight: "400" as const, marginTop: 1 },
-  badge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1 },
-  badgeDot: { width: 6, height: 6, borderRadius: 3 },
-  badgeText: { fontSize: 10, fontWeight: "700" as const, letterSpacing: 1 },
-  statsRow: { flexDirection: "row", gap: 10 },
-  statCard: { flex: 1, borderRadius: 14, padding: 14, alignItems: "center", borderWidth: 1 },
-  statNum: { fontSize: 22, fontWeight: "700" as const },
-  statLabel: { fontSize: 10, fontWeight: "500" as const, marginTop: 2, letterSpacing: 0.5 },
-  ctaWrap: { borderRadius: 20, overflow: "hidden" },
-  ctaButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, paddingVertical: 20, borderRadius: 20 },
-  ctaText: { fontSize: 18, fontWeight: "700" as const, color: "#FFFFFF", letterSpacing: 1 },
-  hintText: { textAlign: "center", fontSize: 12, fontWeight: "500" as const },
-  section: { borderRadius: 16, padding: 16, borderWidth: 1, gap: 12 },
-  sectionTitle: { fontSize: 15, fontWeight: "600" as const, marginBottom: 4 },
-  stepRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  stepNum: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  stepText: { fontSize: 14, fontWeight: "400" as const, flex: 1 },
-  groupLabel: { fontSize: 11, fontWeight: "600" as const, letterSpacing: 1.2, marginBottom: -4 },
-  permCard: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 14, borderWidth: 1 },
-  permIconWrap: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  permInfo: { flex: 1 },
-  permTitle: { fontSize: 14, fontWeight: "600" as const },
-  permDesc: { fontSize: 12, fontWeight: "400" as const, marginTop: 2 },
-  settingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  settingLabel: { flex: 1, fontSize: 14, fontWeight: "500" as const },
-  settingValue: { fontSize: 14, fontWeight: "700" as const },
-  delayButtons: { flexDirection: "row", gap: 8 },
-  delayChip: { flex: 1, paddingVertical: 8, borderRadius: 10, borderWidth: 1, alignItems: "center" },
-  delayChipText: { fontSize: 13, fontWeight: "600" as const },
-  resetBtn: { alignSelf: "center", paddingVertical: 12 },
-  resetText: { fontSize: 13, fontWeight: "400" as const },
+  root: { flex: 1, backgroundColor: COLORS.bg },
+  content: { paddingHorizontal: 18, gap: 14 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12 },
+  logoWrap: { width: 44, height: 44, borderRadius: 12, backgroundColor: COLORS.primary + "20", alignItems: "center", justifyContent: "center" },
+  title: { fontSize: 19, fontWeight: "700", color: COLORS.fg },
+  subtitle: { fontSize: 12, color: COLORS.mutedFg, marginTop: 1 },
+  badge: { marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20, borderWidth: 1 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  badgeText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.8 },
+  row: { flexDirection: "row", gap: 10 },
+  statCard: { flex: 1, backgroundColor: COLORS.card, borderRadius: 12, padding: 12, alignItems: "center", borderWidth: 1, borderColor: COLORS.border },
+  statNum: { fontSize: 20, fontWeight: "700" },
+  statLabel: { fontSize: 10, color: COLORS.mutedFg, marginTop: 2, fontWeight: "500" },
+  bigBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 18, borderRadius: 18 },
+  bigBtnText: { fontSize: 17, fontWeight: "700", color: "#fff", letterSpacing: 0.8 },
+  hint: { textAlign: "center", fontSize: 12, color: COLORS.warning, marginTop: -4 },
+  card: { backgroundColor: COLORS.card, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: COLORS.border, gap: 10 },
+  cardTitle: { fontSize: 14, fontWeight: "600", color: COLORS.fg, marginBottom: 2 },
+  stepRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  stepIcon: { width: 26, height: 26, borderRadius: 8, backgroundColor: COLORS.primary + "20", alignItems: "center", justifyContent: "center" },
+  stepNum: { fontSize: 12, fontWeight: "700", color: COLORS.primary },
+  stepText: { fontSize: 13, color: COLORS.subFg, flex: 1 },
+  groupLabel: { fontSize: 10, fontWeight: "600", color: COLORS.mutedFg, letterSpacing: 1.2, marginBottom: -4 },
+  permRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.card, borderRadius: 12, padding: 12, borderWidth: 1 },
+  permIcon: { width: 36, height: 36, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  permTitle: { fontSize: 13, fontWeight: "600", color: COLORS.fg },
+  permDesc: { fontSize: 11, color: COLORS.mutedFg, marginTop: 1 },
+  chip: { flex: 1, paddingVertical: 8, borderRadius: 9, borderWidth: 1, alignItems: "center" },
+  chipText: { fontSize: 12, fontWeight: "600" },
+  resetBtn: { alignSelf: "center", paddingVertical: 10 },
+  resetText: { fontSize: 12, color: COLORS.mutedFg },
 });
