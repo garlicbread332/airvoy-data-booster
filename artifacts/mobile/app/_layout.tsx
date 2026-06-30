@@ -8,7 +8,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -35,11 +35,26 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
+  const hiddenRef = useRef(false);
+
+  const hideSplash = () => {
+    if (!hiddenRef.current) {
+      hiddenRef.current = true;
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  };
+
   useEffect(() => {
     if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
+      hideSplash();
     }
   }, [fontsLoaded, fontError]);
+
+  // Safety fallback: always hide splash after 3s regardless of font state
+  useEffect(() => {
+    const t = setTimeout(hideSplash, 3000);
+    return () => clearTimeout(t);
+  }, []);
 
   if (!fontsLoaded && !fontError) return null;
 
