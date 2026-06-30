@@ -2,21 +2,17 @@ import { Feather } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React from "react";
 
-import { useColors } from "@/hooks/useColors";
-
 export default function TabLayout() {
-  const colors = useColors();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.mutedForeground,
+        tabBarActiveTintColor: "#3B8BFF",
+        tabBarInactiveTintColor: "#6B7FA8",
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: colors.card,
+          backgroundColor: "#141929",
+          borderTopColor: "#1E2D4A",
           borderTopWidth: 1,
-          borderTopColor: colors.border,
           elevation: 0,
         },
       }}
